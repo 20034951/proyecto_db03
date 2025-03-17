@@ -5,6 +5,21 @@ CREATE DATABASE IF NOT EXISTS InventarioDB;
 USE InventarioDB;
 
 -- Creación de Tablas
+CREATE TABLE roles (
+	id_rol INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) UNIQUE NOT NULL
+);
+
+CREATE TABLE usuarios(
+	id_usuario INT AUTO_INCREMENT PRIMARY KEY,
+    nombres VARCHAR(120) NOT NULL,
+    apellidos VARCHAR(120) NOT NULL,
+    correo VARCHAR(120) UNIQUE NOT NULL,
+    clave VARCHAR(255) NOT NULL,
+    rol_id INT NOT NULL,
+    FOREIGN KEY(rol_id) REFERENCES roles(id_rol)
+);
+
 CREATE TABLE ubicaciones (
 	id_ubicacion INT AUTO_INCREMENT PRIMARY KEY,
     descripcion VARCHAR(100) UNIQUE NOT NULL
@@ -21,7 +36,31 @@ CREATE TABLE productos (
     FOREIGN KEY (ubicacion_id) REFERENCES ubicaciones(id_ubicacion)
 );
 
+
 -- Creación de Store Procedures
+
+-- Tabla usuarios
+-- Registrar Usuario
+DELIMITER $$
+CREATE PROCEDURE InsertarUsuario (
+	IN p_nombres VARCHAR(120),
+    IN p_apellidos VARCHAR(120),
+    IN p_correo VARCHAR(120),
+    IN p_clave VARCHAR(255),
+    IN p_rol_id INT
+)
+BEGIN
+	-- Encriptar la clave de usuario
+    DECLARE clave_encriptada VARCHAR(255);
+    SET clave_encriptada = SHA2(p_clave, 256);
+    
+    -- Insertar el usuario con la clave encriptada
+    INSERT INTO usuarios (nombres, apellidos, correo, clave, rol_id)
+    VALUES (p_nombres, p_apellidos, p_correo, clave_encriptada, p_rol_id);
+END $$
+
+DELIMITER ;
+
 
 -- Tabla ubicaciones
 -- Registrar Ubicacion
@@ -175,7 +214,7 @@ END $$
 DELIMITER ;
 
 
--- Creación de Registros simulador
+-- Creación de Registros simulados
 DELIMITER $$
 CREATE PROCEDURE InsertarDatosSimulados ()
 BEGIN
@@ -184,6 +223,8 @@ BEGIN
 		CALL InsertarUbicacion(CONCAT('Almacén ', i));
         SET i = i + 1;
 	END WHILE;
+    
+    INSERT INTO roles (nombre) VALUES ('admin'), ('almacen'), ('vendedor');
     
     SET i = 1;
     WHILE i <= 500 DO
@@ -203,6 +244,9 @@ DELIMITER ;
 -- CALL InsertarDatosSimulados();
 
 -- Pruebas
+
+CALL InsertarUsuario('Pablo Alfonso', 'Vargas Melgar', '20034951@galileo.edu', 'clavedb', 1);
+
 SELECT * FROM ReporteInventarioGeneral;
 
 CALL ReporteProductosPorIdUbicacion(1);
