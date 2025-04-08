@@ -15,7 +15,7 @@ CREATE TABLE usuarios(
     nombres VARCHAR(120) NOT NULL,
     apellidos VARCHAR(120) NOT NULL,
     correo VARCHAR(120) UNIQUE NOT NULL,
-    clave VARCHAR(255) NOT NULL,
+    clave VARBINARY(255) NOT NULL,
     rol_id INT NOT NULL,
     FOREIGN KEY(rol_id) REFERENCES roles(id_rol)
 );
@@ -41,6 +41,7 @@ CREATE TABLE tipos_transaccion (
     nombre VARCHAR(60) UNIQUE NOT NULL
 );
 
+
 CREATE TABLE transacciones (
 	id_transaccion INT AUTO_INCREMENT PRIMARY KEY,
     producto_id INT NOT NULL,
@@ -53,6 +54,23 @@ CREATE TABLE transacciones (
     FOREIGN KEY (usuario_id) REFERENCES usuarios(id_usuario)
 );
 
+-- Implementación de Partición Horizontal para reporteria y para replicación en MongoDB
+DROP TABLE transacciones_reportes_historia;
+CREATE TABLE transacciones_reportes_historia (
+	id_transaccion INT ,
+    producto_id INT NOT NULL,
+    cambio_stock INT NOT NULL,
+    tipo_id INT NOT NULL,
+    usuario_id INT NOT NULL,
+    fecha DATE NOT NULL,
+    PRIMARY KEY (id_transaccion, fecha)
+) PARTITION BY RANGE (YEAR(fecha)) (
+	PARTITION p2021 VALUES LESS THAN (2022),
+    PARTITION p2022 VALUES LESS THAN (2023),
+    PARTITION p2023 VALUES LESS THAN (2024),
+    PARTITION p2024 VALUES LESS THAN (2025),
+    PARTITION p2025 VALUES LESS THAN (2026)
+);
 
 -- Creación de Store Procedures
 
@@ -63,13 +81,13 @@ CREATE PROCEDURE InsertarUsuario (
 	IN p_nombres VARCHAR(120),
     IN p_apellidos VARCHAR(120),
     IN p_correo VARCHAR(120),
-    IN p_clave VARCHAR(255),
+    IN p_clave VARBINARY(255),
     IN p_rol_id INT
 )
 BEGIN
 	-- Encriptar la clave de usuario
-    DECLARE clave_encriptada VARCHAR(255);
-    SET clave_encriptada = SHA2(p_clave, 256);
+    DECLARE clave_encriptada VARBINARY(255);
+    SET clave_encriptada = AES_ENCRYPT(contrasenia, '$3cr3t4');
     
     -- Insertar el usuario con la clave encriptada
     INSERT INTO usuarios (nombres, apellidos, correo, clave, rol_id)
@@ -129,7 +147,8 @@ CREATE PROCEDURE InsertarProducto(
     IN p_descripcion TEXT,
     IN p_precio DECIMAL(10,2),
     IN p_stock INT,
-    IN p_ubicacion_id INT
+    IN p_ubicacion_id INT,
+    OUT p_id_producto INT
 )
 BEGIN
 	-- Verificación de duplicados por código 
@@ -138,9 +157,13 @@ BEGIN
 	ELSE
 		INSERT INTO productos (codigo, nombre, descripcion, precio, stock, ubicacion_id)
         VALUES (p_codigo, p_nombre, p_descripcion, p_precio, p_stock, p_ubicacion_id);
+        
+        SET p_id_producto = LAST_INSERT_ID();
 	END IF;
 END $$
 DELIMITER ;
+
+-- DROP PROCEDURE ActualizarProducto;
 
 -- Actualizar Producto
 DELIMITER $$
@@ -158,6 +181,7 @@ BEGIN
 	DECLARE stock_anterior INT;
     DECLARE tipo_transaccion INT;
     DECLARE stock_cambio INT;
+    DECLARE v_transaccion_id INT; -- Variable para almacenar el ID de la transacción
     
     SELECT stock INTO stock_anterior FROM productos WHERE id_producto = p_id_producto;
     
@@ -180,12 +204,55 @@ BEGIN
     WHERE id_producto = p_id_producto;
     
     IF stock_anterior <> p_stock THEN
-		INSERT INTO transacciones (producto_id, cambio_stock, tipo_id, usuario_id)
-        VALUES (p_id_producto, stock_cambio, tipo_transaccion, p_usuario_id);
+		-- Registro de Transacción
+        CALL InsertarTransaccion(p_id_producto, stock_cambio, tipo_transaccion, p_usuario_id, v_transaccion_id);
+        
+        -- Replicación de Registro para Reporteria y Replicación en MongoDB
+        CALL InsertarTransaccionReportesHistoria(v_transaccion_id, p_id_producto, stock_cambio, tipo_transaccion, p_usuario_id);
 	END IF;
     
 END $$
 DELIMITER ;
+
+-- Insertar Transacción
+DELIMITER $$
+
+CREATE PROCEDURE InsertarTransaccion(
+    IN p_id_producto INT,
+    IN p_stock_cambio INT,
+    IN p_tipo_transaccion INT,
+    IN p_usuario_id INT,
+    OUT p_transaccion_id INT
+)
+BEGIN
+    INSERT INTO transacciones (producto_id, cambio_stock, tipo_id, usuario_id)
+    VALUES (p_id_producto, p_stock_cambio, p_tipo_transaccion, p_usuario_id);
+    
+    SET p_transaccion_id = LAST_INSERT_ID();
+END $$
+
+DELIMITER ;
+
+
+-- Insertar Transacción para Reporteria y Replicación en MongoDB
+DELIMITER $$
+
+CREATE PROCEDURE InsertarTransaccionReportesHistoria(
+    IN p_id_transaccion INT,
+    IN p_id_producto INT,
+    IN p_stock_cambio INT,
+    IN p_tipo_transaccion INT,
+    IN p_usuario_id INT
+)
+BEGIN
+    INSERT INTO transacciones_reportes_historia (id_transaccion, producto_id, cambio_stock, tipo_id, usuario_id, fecha)
+    VALUES (p_id_transaccion, p_id_producto, p_stock_cambio, p_tipo_transaccion, p_usuario_id, CURDATE());
+END $$
+
+DELIMITER ;
+
+
+
 
 
 -- Eliminar Producto
@@ -305,7 +372,7 @@ BEGIN
         SET i = i + 1;
 	END WHILE;
 END $$
-DELIMITER ;
+DELIMITER ;ReporteTransacciones
 
 -- CALL InsertarDatosSimulados();
 
@@ -341,3 +408,7 @@ CALL ActualizarProducto(3, 'P-0003', 'Producto 3', 'Descripción 3', 57.51, 90, 
 
 
 CALL ReporteTransacciones();
+
+
+SELECT * FROM transacciones;
+SELECT * FROM transacciones_reportes_historia PARTITION(p2025) WHERE fecha = CURDATE();
